@@ -156,7 +156,6 @@ pass
 
 
 def _merge_lora(layer, name):
-
     bias = getattr(layer, "bias", None)
     if isinstance(layer, (Bnb_Linear4bit, Peft_Linear4bit, Peft_Linear)):
         # Is LoRA so we need to merge!
@@ -167,18 +166,19 @@ def _merge_lora(layer, name):
         else:
             dtype = W.dtype
         W = W.to(torch.float32).t()
-        # W = W.t()
 
         if A is not None:
-            # sAB = (A.t().to(torch.float32) @ (s * B.t().to(torch.float32)))
-            # W += sAB
-            W.addmm_(A.t().to(torch.float32), B.t().to(torch.float32), alpha = s)
-            # W.addmm_(A.t().to(W.dtype), B.t().to(W.dtype), alpha = s)
-            # if not torch.isfinite(W).all():
+            # Shape check before attempting in-place addmm
+            if W.shape != (A.shape[1], B.shape[0]):
+                print(f"[WARN] Skipping LoRA merge for {name}: W shape {W.shape} vs A @ B.T shape {[A.shape[1], B.shape[0]]}")
+                return W.t().to(dtype), bias
+            try:
+                W.addmm_(A.t().to(torch.float32), B.t().to(torch.float32), alpha=s)
+            except RuntimeError as e:
+                raise RuntimeError(f"[ERROR] addmm_ failed during LoRA merge in {name}: {e}")
             maximum_element = torch.max(W.min().abs(), W.max())
             if not torch.isfinite(maximum_element).item():
                 raise ValueError(f"Unsloth: Merge failed.\n{name} has some elements = infinity.")
-        pass
         W = W.t().to(dtype)
     else:
         W = layer.weight
